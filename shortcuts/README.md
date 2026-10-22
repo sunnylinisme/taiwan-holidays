@@ -1,4 +1,8 @@
-# iPhone 公開通用版捷徑
+# 台灣休假日 iPhone 捷徑｜安裝與使用
+
+用 iPhone 內建「捷徑」，把台灣休假日加入自己選擇的行事曆。這是本專案提供給一般使用者的主要工具。
+
+[回專案首頁](../README.md)
 
 [下載「更新台灣休假日（公開通用版）」](https://github.com/sunnylinisme/taiwan-holidays/raw/refs/heads/main/shortcuts/taiwan-holidays-public.shortcut)
 
