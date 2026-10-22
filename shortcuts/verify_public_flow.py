@@ -44,7 +44,7 @@ class VM:
      elif alt is not None:self.seq(alt+1,j)
     else:
      values=self.val(p['WFInput']);values=values if isinstance(values,list) else [values]
-     for item in values:self.v['Repeat Item']=item;self.seq(i+1,j)
+     for item in values:self.v['Repeat Item']=item;self.out[p['UUID']]=item;self.seq(i+1,j)
     i=j+1;continue
    if op=='comment' or op=='nothing':pass
    elif op=='date':r=TODAY if p['WFDateActionMode']=='Current Date' else dt.datetime.fromisoformat(str(self.val(p['WFDateActionDate'])))
@@ -118,6 +118,12 @@ for a in empty['WFWorkflowActions']:
 e=VM(shortcuts=[{'name':NAME,'workflow':empty}]).run();assert e.writes==e.removes==0
 assert v.reads==[NAME]
 assert all(e['start']>=TODAY for e in v.events)
+depth=0
+for action in A:
+ if action['WFWorkflowActionIdentifier'].endswith('.repeat.each'):
+  mode=action['WFWorkflowActionParameters']['WFControlFlowMode']
+  depth += 1 if mode==0 else -1
+  assert depth<=1, 'Nested repeat item scope is forbidden'
 assert len(W['WFWorkflowImportQuestions'])==1
 assert sum(a['WFWorkflowActionIdentifier'].endswith('.addnewevent') for a in A)==1
 assert 'TW-DGPA-PUBLIC-CONFIG' not in str(W) and '2000-01-01' not in str(W)
