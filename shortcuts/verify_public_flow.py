@@ -84,7 +84,7 @@ class VM:
     if choice.get('Value',{}).get('Type')=='Ask':
      self.prompts+=1
      if self.cancel_choice:raise Stop()
-     calendar='公開測試日曆'
+     calendar=getattr(self,'selected_calendar','公開測試日曆')
     else:
      calendar=self.val(choice)
      assert isinstance(calendar,str), 'Calendar input must be plain text; dictionary becomes JSON title at native runtime'
@@ -103,37 +103,28 @@ class VM:
   return self
 state={}
 v=VM(storage=state).run();expected=sum(d['date_code']>=20261022 for d in F['holidays'])
-assert v.prompts==1 and v.writes==expected and v.removes==0 and len(v.events)==expected
-assert state['TW-DGPA-TargetCalendar-v2']=='公開測試日曆'
+assert v.prompts==1 and v.writes==expected and v.removes==0 and len(v.events)==expected and not state
 assert all(e['start']==e['end'] and e['start']>=TODAY for e in v.events)
-v2=VM(v.events,storage=state).run();assert v2.prompts==v2.writes==v2.removes==0 and len(v2.events)==expected
-v3=VM(v2.events,storage=state).run();assert v3.prompts==v3.writes==v3.removes==0
-# Existing manually-created all-day event: only the just-created setup seed is removed.
+# Every rerun prompts; the real-holiday seed is removed when already present. Final events unchanged.
+v2=VM(v.events).run();assert v2.prompts==1 and v2.writes==v2.removes==1 and v2.events==v.events
+v3=VM(v2.events).run();assert v3.prompts==1 and v3.events==v.events
 manual=copy.deepcopy(v.events[0]);manual['notes']='手動行程';manual['title']='個人假期'
-m=VM([manual],storage={}).run();assert m.prompts==1 and m.removes==1 and manual in m.events and len(m.events)==expected
-assert all(e['start']>=TODAY for e in m.events)
-# Already-filled calendar: first setup removes its seed and leaves every old event intact.
-old=VM(v.events,storage={}).run();assert old.prompts==1 and old.writes==old.removes==1 and old.events==v.events
-# Canceling the first calendar choice has no event or storage mutations.
-empty={};cancelled=VM(storage=empty,cancel_choice=True).run();assert cancelled.prompts==1 and cancelled.writes==cancelled.removes==0 and not empty
-# A cleared saved choice triggers first-run selection again; final calendar is unchanged.
-cleared={};again=VM(v.events,storage=cleared).run();assert again.prompts==1 and again.events==v.events
-# Official corrections delete only owned events in the chosen calendar.
+m=VM([manual]).run();assert m.prompts==1 and m.removes==1 and manual in m.events and len(m.events)==expected
+cancelled=VM(cancel_choice=True).run();assert cancelled.prompts==1 and cancelled.writes==cancelled.removes==0
+# Switching calendars never treats another calendar's holiday as an existing event.
+switch=VM(v.events);switch.selected_calendar='第二個日曆';switch.run()
+assert switch.prompts==1 and switch.writes==expected and len(switch.events)==2*expected
+assert all(e in switch.events for e in v.events)
+rerun=VM(switch.events);rerun.selected_calendar='第二個日曆';rerun.run();assert rerun.events==switch.events
 newfeed=copy.deepcopy(F);day=next(d for d in newfeed['holidays'] if d['date_code']>=20261022)
 newfeed['holidays'].remove(day);newfeed['cancelled']=[day]
 other=copy.deepcopy(v.events[0]);other['calendar']='其他日曆'
-c=VM(v.events+[other],newfeed,storage=state).run();assert c.prompts==0 and c.removes==1 and c.writes==0 and other in c.events
-c2=VM(c.events,newfeed,storage=state).run();assert c2.prompts==c2.removes==c2.writes==0
-# Invalid feed aborts before any first-run picker, persistence or calendar write.
+c=VM(v.events+[other],newfeed).run();assert c.prompts==1 and c.removes==2 and c.writes==1 and other in c.events
+c2=VM(c.events,newfeed).run();assert c2.prompts==1 and c2.removes==c2.writes==1 and c2.events==c.events
 bad=copy.deepcopy(F);bad['schema']=2
-empty={};b=VM(feed=bad,storage=empty).run();assert b.prompts==b.writes==b.removes==0 and not empty
+b=VM(feed=bad).run();assert b.prompts==b.writes==b.removes==0
 assert W['WFWorkflowImportQuestions']==[]
-assert not any(a['WFWorkflowActionIdentifier'].endswith('.getmyworkflows') for a in A)
-assert sum(a['WFWorkflowActionIdentifier'].endswith('.setstoredcontent') for a in A)==1
+assert not any(a['WFWorkflowActionIdentifier'].endswith(('.getmyworkflows','.getstoredcontent','.setstoredcontent','.deletestoredcontent','.writefile','.savefile','.appendfile')) for a in A)
 assert 'TW-DGPA-PUBLIC-CONFIG' not in str(W) and '2000-01-01' not in str(W)
-assert not any(a['WFWorkflowActionIdentifier'].endswith(('.writefile','.savefile','.appendfile')) for a in A)
-print('PASS: first-run picker once + persistent storage; first sync only',expected,'real future holidays; repeat runs zero prompts/writes/deletes; manual entries preserved; seeded duplicate removed only; canceled picker leaves no changes; reset asks again; corrections repeat-safe; invalid feed stops before setup.')
-
-# Runtime destination mismatch must stop after the first affected add, without saving a different choice.
-bad=VM(storage={'TW-DGPA-TargetCalendar-v2':'公開測試日曆'});bad.wrong_calendar=True;bad.run();assert bad.writes==1 and any('日曆與選擇不符' in x for x in bad.messages)
-print('PASS: wrong destination stops after one add; stored target preserved.')
+bad=VM();bad.wrong_calendar=True;bad.run();assert bad.writes==2 and any('日曆與選擇不符' in x for x in bad.messages)
+print('PASS: prompt once EVERY run; no persistent settings; repeat final events unchanged; switches calendars correctly; manual entries preserved; cancel has no changes; corrections scoped; invalid feed stops; wrong destination stops.')
