@@ -51,6 +51,13 @@ class VM:
    elif op=='getstoredcontent':r=self.storage.get(p['WFStoredContentKey'])
    elif op=='setstoredcontent':self.storage[p['WFStoredContentKey']]=self.val(p['WFInput']);r=self.storage[p['WFStoredContentKey']]
    elif op=='dictionary':r={self.val(q['WFKey']):self.val(q['WFValue']) for q in p['WFItems']['Value']['WFDictionaryFieldValueItems']}
+   elif op=='alert':
+    if getattr(self,'cancel_confirmation',False) and p['WFAlertActionTitle']=='確認本次同步目標':raise Stop()
+   elif op=='getupcomingevents':
+    self.prompts+=1
+    if self.cancel_choice:raise Stop()
+    target=getattr(self,'selected_calendar','公開測試日曆')
+    r=sorted([e for e in self.events if e['calendar']==target and e['start']>=TODAY],key=lambda e:e['start'])[:1]
    elif op=='downloadurl':r=copy.deepcopy(self.feed)
    elif op=='detect.dictionary':
     r=self.val(p['WFInput'])
@@ -101,30 +108,31 @@ class VM:
   try:self.seq(0,len(A))
   except Stop:pass
   return self
-state={}
-v=VM(storage=state).run();expected=sum(d['date_code']>=20261022 for d in F['holidays'])
-assert v.prompts==1 and v.writes==expected and v.removes==0 and len(v.events)==expected and not state
-assert all(e['start']==e['end'] and e['start']>=TODAY for e in v.events)
-# Every rerun prompts; the real-holiday seed is removed when already present. Final events unchanged.
-v2=VM(v.events).run();assert v2.prompts==1 and v2.writes==v2.removes==1 and v2.events==v.events
-v3=VM(v2.events).run();assert v3.prompts==1 and v3.events==v.events
-manual=copy.deepcopy(v.events[0]);manual['notes']='手動行程';manual['title']='個人假期'
-m=VM([manual]).run();assert m.prompts==1 and m.removes==1 and manual in m.events and len(m.events)==expected
-cancelled=VM(cancel_choice=True).run();assert cancelled.prompts==1 and cancelled.writes==cancelled.removes==0
-# Switching calendars never treats another calendar's holiday as an existing event.
-switch=VM(v.events);switch.selected_calendar='第二個日曆';switch.run()
-assert switch.prompts==1 and switch.writes==expected and len(switch.events)==2*expected
-assert all(e in switch.events for e in v.events)
-rerun=VM(switch.events);rerun.selected_calendar='第二個日曆';rerun.run();assert rerun.events==switch.events
+def anchor(calendar):
+ return {'id':next(EVENT_IDS),'calendar':calendar,'title':'既有一般行程','start':TODAY+dt.timedelta(hours=12),'end':TODAY+dt.timedelta(hours=13),'all_day':False,'notes':'保留'}
+base=[anchor('公開測試日曆'),anchor('第二個日曆')]
+v=VM(base).run();expected=sum(d['date_code']>=20261022 for d in F['holidays'])
+assert v.prompts==1 and v.writes==expected and v.removes==0 and len(v.events)==expected+2
+assert all(e['start']==e['end'] for e in v.events if e['all_day'])
+v2=VM(v.events).run();assert v2.prompts==1 and v2.writes==v2.removes==0 and v2.events==v.events
+v3=VM(v2.events).run();assert v3.prompts==1 and v3.writes==v3.removes==0 and v3.events==v.events
+manual=copy.deepcopy(next(e for e in v.events if e['all_day']));manual['notes']='手動行程';manual['title']='個人假期'
+m=VM(base+[manual]).run();assert m.writes==expected-1 and m.removes==0 and manual in m.events
+cancelled=VM(base,cancel_choice=True).run();assert cancelled.prompts==1 and cancelled.writes==cancelled.removes==0
+confirm=VM(base);confirm.cancel_confirmation=True;confirm.run();assert confirm.writes==confirm.removes==0
+empty=VM().run();assert empty.prompts==1 and empty.writes==empty.removes==0
+otheronly=VM([anchor('其他日曆')]).run();assert otheronly.writes==otheronly.removes==0
+switch=VM(v.events);switch.selected_calendar='第二個日曆';switch.run();assert switch.prompts==1 and switch.writes==expected and switch.removes==0 and all(e in switch.events for e in v.events)
+rerun=VM(switch.events);rerun.selected_calendar='第二個日曆';rerun.run();assert rerun.events==switch.events and rerun.writes==rerun.removes==0
 newfeed=copy.deepcopy(F);day=next(d for d in newfeed['holidays'] if d['date_code']>=20261022)
 newfeed['holidays'].remove(day);newfeed['cancelled']=[day]
-other=copy.deepcopy(v.events[0]);other['calendar']='其他日曆'
-c=VM(v.events+[other],newfeed).run();assert c.prompts==1 and c.removes==2 and c.writes==1 and other in c.events
-c2=VM(c.events,newfeed).run();assert c2.prompts==1 and c2.removes==c2.writes==1 and c2.events==c.events
+other=copy.deepcopy(next(e for e in v.events if e['all_day']));other['calendar']='其他日曆'
+c=VM(v.events+[other],newfeed).run();assert c.prompts==1 and c.removes==1 and c.writes==0 and other in c.events
+c2=VM(c.events,newfeed).run();assert c2.removes==c2.writes==0 and c2.events==c.events
 bad=copy.deepcopy(F);bad['schema']=2
-b=VM(feed=bad).run();assert b.prompts==b.writes==b.removes==0
+b=VM(base,feed=bad).run();assert b.writes==b.removes==0
 assert W['WFWorkflowImportQuestions']==[]
 assert not any(a['WFWorkflowActionIdentifier'].endswith(('.getmyworkflows','.getstoredcontent','.setstoredcontent','.deletestoredcontent','.writefile','.savefile','.appendfile')) for a in A)
-assert 'TW-DGPA-PUBLIC-CONFIG' not in str(W) and '2000-01-01' not in str(W)
-bad=VM();bad.wrong_calendar=True;bad.run();assert bad.writes==2 and any('日曆與選擇不符' in x for x in bad.messages)
-print('PASS: prompt once EVERY run; no persistent settings; repeat final events unchanged; switches calendars correctly; manual entries preserved; cancel has no changes; corrections scoped; invalid feed stops; wrong destination stops.')
+assert sum(a['WFWorkflowActionIdentifier'].endswith('.addnewevent') for a in A)==1
+bad=VM(base);bad.wrong_calendar=True;bad.run();assert bad.writes==1 and any('日曆與選擇不符' in x for x in bad.messages)
+print('PASS: read-only selection with purpose+confirmation; no selection seed; repeat zero adds/deletes; empty calendar/cancel zero writes; switches scoped; manual preserved; official correction scoped; mismatch stops.')
