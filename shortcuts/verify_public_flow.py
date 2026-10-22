@@ -37,7 +37,7 @@ class VM:
      if A[j]['WFWorkflowActionParameters'].get('GroupingIdentifier')==g and A[j]['WFWorkflowActionParameters'].get('WFControlFlowMode')==1:alt=j
      j+=1
     if op=='conditional':
-     left=float(self.val(p['WFInput']));right=float(p['WFNumberValue']);condition=p['WFCondition']
+     left=self.val(p['WFInput']);right=self.val(p['WFConditionalActionString']) if 'WFConditionalActionString' in p else float(p['WFNumberValue']);left=str(left) if 'WFConditionalActionString' in p else float(left);condition=p['WFCondition']
      ok={0:left<right,2:left>right,3:left>=right,4:left==right,5:left!=right}[condition]
      if ok:self.seq(i+1,alt or j)
      elif alt is not None:self.seq(alt+1,j)
@@ -85,7 +85,10 @@ class VM:
      self.prompts+=1
      if self.cancel_choice:raise Stop()
      calendar='公開測試日曆'
-    else:calendar=self.val(choice)['Title']
+    else:
+     calendar=self.val(choice)
+     assert isinstance(calendar,str), 'Calendar input must be plain text; dictionary becomes JSON title at native runtime'
+     if getattr(self,'wrong_calendar',False):calendar='錯誤預設日曆'
     r={'id':next(EVENT_IDS),'calendar':calendar,'title':self.val(p['WFCalendarItemTitle']),'start':dt.datetime.fromisoformat(str(self.val(p['WFCalendarItemStartDate']))),'end':dt.datetime.fromisoformat(str(self.val(p['WFCalendarItemEndDate']))),'all_day':p['WFCalendarItemAllDay'],'notes':self.val(p['WFCalendarItemNotes'])};self.events.append(r);self.writes+=1
    elif op=='removeevents':
     values=self.val(p['WFInputEvents']);values=values if isinstance(values,list) else [values]
@@ -130,3 +133,7 @@ assert sum(a['WFWorkflowActionIdentifier'].endswith('.setstoredcontent') for a i
 assert 'TW-DGPA-PUBLIC-CONFIG' not in str(W) and '2000-01-01' not in str(W)
 assert not any(a['WFWorkflowActionIdentifier'].endswith(('.writefile','.savefile','.appendfile')) for a in A)
 print('PASS: first-run picker once + persistent storage; first sync only',expected,'real future holidays; repeat runs zero prompts/writes/deletes; manual entries preserved; seeded duplicate removed only; canceled picker leaves no changes; reset asks again; corrections repeat-safe; invalid feed stops before setup.')
+
+# Runtime destination mismatch must stop after the first affected add, without saving a different choice.
+bad=VM(storage={'TW-DGPA-TargetCalendar-v2':'公開測試日曆'});bad.wrong_calendar=True;bad.run();assert bad.writes==1 and any('日曆與選擇不符' in x for x in bad.messages)
+print('PASS: wrong destination stops after one add; stored target preserved.')
