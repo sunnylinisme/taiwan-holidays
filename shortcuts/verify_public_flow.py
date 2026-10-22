@@ -1,16 +1,21 @@
 """Interpret the serialized control flow against in-memory fixtures only.
 No Shortcut execution, network, EventKit, or user calendar access.
 """
-import copy,datetime as dt,json,plistlib
+import copy,datetime as dt,json,plistlib,re
 from pathlib import Path
 BASE=Path(__file__).resolve().parent
-A=plistlib.loads((BASE/'taiwan-holidays-public.plist').read_bytes())['WFWorkflowActions']
+W=plistlib.loads((BASE/'taiwan-holidays-public.plist').read_bytes())
+A=W['WFWorkflowActions']
+NAME=W['WFWorkflowName']
+FIXTURE=copy.deepcopy(W)
+for a in FIXTURE['WFWorkflowActions']:
+ if a['WFWorkflowActionIdentifier'].endswith('.addnewevent'):a['WFWorkflowActionParameters']['WFCalendarDescriptor']={'Title':'公開測試日曆','Identifier':'test-calendar-id','IsAllCalendar':False}
 F=json.loads((BASE.parent/'data/holidays.json').read_text())
 TODAY=dt.datetime(2026,10,22,tzinfo=dt.timezone(dt.timedelta(hours=8)))
 class Stop(Exception):pass
 class VM:
- def __init__(self,events=None,feed=None):
-  self.events=copy.deepcopy(events or []);self.feed=copy.deepcopy(feed or F);self.v={};self.out={};self.writes=0;self.removes=0;self.messages=[]
+ def __init__(self,events=None,feed=None,shortcuts=None):
+  self.shortcuts=copy.deepcopy(shortcuts if shortcuts is not None else [{'name':NAME,'workflow':FIXTURE},{'name':'其他捷徑','workflow':None}]);self.reads=[];self.events=copy.deepcopy(events or []);self.feed=copy.deepcopy(feed or F);self.v={};self.out={};self.writes=0;self.removes=0;self.messages=[]
  def val(self,x):
   if isinstance(x,dict):
    typ=x.get('WFSerializationType');d=x.get('Value',{})
@@ -44,9 +49,14 @@ class VM:
    if op=='comment' or op=='nothing':pass
    elif op=='date':r=TODAY if p['WFDateActionMode']=='Current Date' else dt.datetime.fromisoformat(str(self.val(p['WFDateActionDate'])))
    elif op=='format.date':r=dt.datetime.fromisoformat(str(self.val(p['WFDate']))).strftime('%Y%m%d')
+   elif op=='getmyworkflows':r=self.shortcuts
+   elif op=='getitemname':r=self.val(p['WFInput'])['name']
+   elif op=='text.match':r=re.findall(p['WFMatchTextPattern'],str(self.val(p['text'])))
    elif op=='downloadurl':r=copy.deepcopy(self.feed)
    elif op=='detect.dictionary':
-    r=self.val(p['WFInput']);r=json.loads(r) if isinstance(r,str) else r
+    r=self.val(p['WFInput'])
+    if isinstance(r,dict) and 'workflow' in r:self.reads.append(r['name']);r=copy.deepcopy(r['workflow'])
+    r=json.loads(r) if isinstance(r,str) else r
    elif op=='gettext':r=self.val(p['WFTextActionText'])
    elif op=='number':r=float(p['WFNumberActionNumber'])
    elif op=='setvariable':self.v[p['WFVariableName']]=self.val(p['WFInput'])
@@ -56,7 +66,7 @@ class VM:
    elif op=='math':
     l=float(self.val(p['WFInput']));v=float(self.val(p['WFMathOperand']));r=l+v if p['WFMathOperation']=='+' else l-v
    elif op=='count':
-    r=self.val(p['Input']);r=len(r) if isinstance(r,list) else (0 if r is None else 1)
+    r=self.val(p['Input']);r=len(r) if isinstance(r,list) or p['WFCountType']=='Characters' else (0 if r is None else 1)
    elif op=='properties.calendarevents':
     r=self.val(p['WFInput']);r=r[0] if isinstance(r,list) else r;r=r['calendar']
    elif op=='filter.calendarevents':
@@ -85,22 +95,34 @@ class VM:
   except Stop:pass
   return self
 v=VM().run();expected=sum(d['date_code']>=20261022 for d in F['holidays'])
-assert v.writes==expected+1 and len(v.events)==expected+1
+assert v.writes==expected and len(v.events)==expected
 assert all(e['start']==e['end'] for e in v.events)
 v2=VM(v.events).run();assert v2.writes==v2.removes==0 and len(v2.events)==len(v.events)
 v3=VM(v2.events).run();assert v3.writes==v3.removes==0
 # An unrelated all-day event causes a skip, and remains untouched.
-manual=copy.deepcopy(v.events[1]);manual['notes']='手動行程';manual['title']='個人假期'
-manual_events=[v.events[0],manual]
-m=VM(manual_events).run();assert manual in m.events and len(m.events)==expected+1
+manual=copy.deepcopy(v.events[0]);manual['notes']='手動行程';manual['title']='個人假期'
+manual_events=[manual]
+m=VM(manual_events).run();assert manual in m.events and len(m.events)==expected
 # Official cancellation removes only marked events, including matching date/calendar.
 newfeed=copy.deepcopy(F);cancel=next(d for d in newfeed['holidays'] if d['date_code']>=20261022)
 newfeed['holidays'].remove(cancel);newfeed['cancelled']=[cancel]
-c=VM(v.events, newfeed).run();assert c.removes==1 and c.writes==0
+other_calendar=copy.deepcopy(v.events[0]);other_calendar['calendar']='其他日曆'
+c=VM(v.events+[other_calendar], newfeed).run();assert c.removes==1 and c.writes==0 and other_calendar in c.events
 c2=VM(c.events,newfeed).run();assert c2.removes==c2.writes==0
-# Duplicate configuration markers stop before any mutation.
-blocked=VM(v.events+[copy.deepcopy(v.events[0])]).run();assert blocked.writes==blocked.removes==0
+# Missing, renamed, duplicate or empty calendar configuration stops before any write.
+for shortcuts in [[],[{'name':NAME+'改名','workflow':FIXTURE}], [{'name':NAME,'workflow':FIXTURE}]*2]:
+ blocked=VM(shortcuts=shortcuts).run();assert blocked.writes==blocked.removes==0
+empty=copy.deepcopy(FIXTURE)
+for a in empty['WFWorkflowActions']:
+ if a['WFWorkflowActionIdentifier'].endswith('.addnewevent'):a['WFWorkflowActionParameters']['WFCalendarDescriptor']['Title']=''
+e=VM(shortcuts=[{'name':NAME,'workflow':empty}]).run();assert e.writes==e.removes==0
+assert v.reads==[NAME]
+assert all(e['start']>=TODAY for e in v.events)
+assert len(W['WFWorkflowImportQuestions'])==1
+assert sum(a['WFWorkflowActionIdentifier'].endswith('.addnewevent') for a in A)==1
+assert 'TW-DGPA-PUBLIC-CONFIG' not in str(W) and '2000-01-01' not in str(W)
+assert not any(a['WFWorkflowActionIdentifier'].endswith(('.writefile','.savefile','.appendfile')) for a in A)
 # Invalid downloaded schema stops before initial setup/event creation.
 bad=copy.deepcopy(F);bad['schema']=2
 b=VM(feed=bad).run();assert b.writes==b.removes==0
-print('PASS: serialized-flow simulation, first-run setup +',expected,'future holidays; 2 repeat runs write/delete zero; manual event preserved; cancellation repeat-safe; duplicate configuration and invalid schema stop before writes.')
+print('PASS: serialized-flow simulation; first run adds only',expected,'future holidays; two repeat runs write/delete zero; manual event preserved; cancellation repeat-safe; missing/duplicate/empty settings and invalid feed stop before writes; unrelated Shortcut contents never read.')
