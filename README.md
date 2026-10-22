@@ -6,7 +6,7 @@
 
 ## 下載捷徑
 
-**[下載「更新台灣休假日（公開通用版）」.shortcut](https://github.com/sunnylinisme/taiwan-holidays/raw/refs/heads/main/shortcuts/taiwan-holidays-public.shortcut)**
+**[下載「更新台灣休假日（公開通用版）」.shortcut](https://github.com/sunnylinisme/taiwan-holidays-shortcuts/raw/refs/heads/main/shortcuts/taiwan-holidays-public.shortcut)**
 
 [完整安裝、重複執行與使用限制](shortcuts/README.md)
 
@@ -58,7 +58,7 @@ GitHub Actions 每月 **28 日台灣時間 06:23** 執行，也可在 Actions �
 
 ### 給開發者的資料格式
 
-[`data/holidays.json`](https://raw.githubusercontent.com/sunnylinisme/taiwan-holidays/main/data/holidays.json)
+[`data/holidays.json`](https://raw.githubusercontent.com/sunnylinisme/taiwan-holidays-shortcuts/main/data/holidays.json)
 
 - `schema`: 格式版本，目前為數字 `1`。
 - `generated_at`: 最後一次成功下載及驗證的 UTC 時間。

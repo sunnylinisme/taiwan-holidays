@@ -80,7 +80,7 @@
 				<key>WFHTTPMethod</key>
 				<string>GET</string>
 				<key>WFURL</key>
-				<string>https://raw.githubusercontent.com/sunnylinisme/taiwan-holidays/main/data/holidays.json</string>
+				<string>https://raw.githubusercontent.com/sunnylinisme/taiwan-holidays-shortcuts/main/data/holidays.json</string>
 			</dict>
 		</dict>
 		<dict>

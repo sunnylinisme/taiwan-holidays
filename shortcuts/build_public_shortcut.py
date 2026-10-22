@@ -5,7 +5,7 @@ BASE = Path(__file__).resolve().parent
 scaffold = {'WFWorkflowClientVersion':'2600', 'WFWorkflowActions':[]}
 calendar = {'Title':'', 'IsAllCalendar':False}
 NAME = '更新台灣休假日（公開通用版）'
-FEED = 'https://raw.githubusercontent.com/sunnylinisme/taiwan-holidays/main/data/holidays.json'
+FEED = 'https://raw.githubusercontent.com/sunnylinisme/taiwan-holidays-shortcuts/main/data/holidays.json'
 actions = []
 def uid(): return str(uuid.uuid4()).upper()
 def token(v): return {'WFSerializationType':'WFTextTokenAttachment','Value':v}

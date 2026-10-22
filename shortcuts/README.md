@@ -4,7 +4,7 @@
 
 [回專案首頁](../README.md)
 
-[下載「更新台灣休假日（公開通用版）」](https://github.com/sunnylinisme/taiwan-holidays/raw/refs/heads/main/shortcuts/taiwan-holidays-public.shortcut)
+[下載「更新台灣休假日（公開通用版）」](https://github.com/sunnylinisme/taiwan-holidays-shortcuts/raw/refs/heads/main/shortcuts/taiwan-holidays-public.shortcut)
 
 版本 **3.2**。每次執行都詢問行事曆，不儲存上次選擇，不必輸入名稱，不預選日曆，不新增設定行程或外部設定檔。資料包含政府行政機關的週末、國定假日及補假。
 
