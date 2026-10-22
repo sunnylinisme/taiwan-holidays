@@ -1,21 +1,20 @@
 """Interpret the serialized control flow against in-memory fixtures only.
 No Shortcut execution, network, EventKit, or user calendar access.
 """
-import copy,datetime as dt,json,plistlib,re
+import copy,datetime as dt,json,plistlib,re,itertools
 from pathlib import Path
 BASE=Path(__file__).resolve().parent
 W=plistlib.loads((BASE/'taiwan-holidays-public.plist').read_bytes())
 A=W['WFWorkflowActions']
 NAME=W['WFWorkflowName']
-FIXTURE=copy.deepcopy(W)
-for a in FIXTURE['WFWorkflowActions']:
- if a['WFWorkflowActionIdentifier'].endswith('.addnewevent'):a['WFWorkflowActionParameters']['WFCalendarDescriptor']={'Title':'公開測試日曆','Identifier':'test-calendar-id','IsAllCalendar':False}
 F=json.loads((BASE.parent/'data/holidays.json').read_text())
 TODAY=dt.datetime(2026,10,22,tzinfo=dt.timezone(dt.timedelta(hours=8)))
+EVENT_IDS=itertools.count()
 class Stop(Exception):pass
 class VM:
- def __init__(self,events=None,feed=None,shortcuts=None):
-  self.shortcuts=copy.deepcopy(shortcuts if shortcuts is not None else [{'name':NAME,'workflow':FIXTURE},{'name':'其他捷徑','workflow':None}]);self.reads=[];self.events=copy.deepcopy(events or []);self.feed=copy.deepcopy(feed or F);self.v={};self.out={};self.writes=0;self.removes=0;self.messages=[]
+ def __init__(self,events=None,feed=None,storage=None,cancel_choice=False):
+  self.storage=storage if storage is not None else {};self.cancel_choice=cancel_choice;self.prompts=0
+  self.events=copy.deepcopy(events or []);self.feed=copy.deepcopy(feed or F);self.v={};self.out={};self.writes=0;self.removes=0;self.messages=[]
  def val(self,x):
   if isinstance(x,dict):
    typ=x.get('WFSerializationType');d=x.get('Value',{})
@@ -49,13 +48,12 @@ class VM:
    if op=='comment' or op=='nothing':pass
    elif op=='date':r=TODAY if p['WFDateActionMode']=='Current Date' else dt.datetime.fromisoformat(str(self.val(p['WFDateActionDate'])))
    elif op=='format.date':r=dt.datetime.fromisoformat(str(self.val(p['WFDate']))).strftime('%Y%m%d')
-   elif op=='getmyworkflows':r=self.shortcuts
-   elif op=='getitemname':r=self.val(p['WFInput'])['name']
-   elif op=='text.match':r=re.findall(p['WFMatchTextPattern'],str(self.val(p['text'])))
+   elif op=='getstoredcontent':r=self.storage.get(p['WFStoredContentKey'])
+   elif op=='setstoredcontent':self.storage[p['WFStoredContentKey']]=self.val(p['WFInput']);r=self.storage[p['WFStoredContentKey']]
+   elif op=='dictionary':r={self.val(q['WFKey']):self.val(q['WFValue']) for q in p['WFItems']['Value']['WFDictionaryFieldValueItems']}
    elif op=='downloadurl':r=copy.deepcopy(self.feed)
    elif op=='detect.dictionary':
     r=self.val(p['WFInput'])
-    if isinstance(r,dict) and 'workflow' in r:self.reads.append(r['name']);r=copy.deepcopy(r['workflow'])
     r=json.loads(r) if isinstance(r,str) else r
    elif op=='gettext':r=self.val(p['WFTextActionText'])
    elif op=='number':r=float(p['WFNumberActionNumber'])
@@ -66,7 +64,7 @@ class VM:
    elif op=='math':
     l=float(self.val(p['WFInput']));v=float(self.val(p['WFMathOperand']));r=l+v if p['WFMathOperation']=='+' else l-v
    elif op=='count':
-    r=self.val(p['Input']);r=len(r) if isinstance(r,list) or p['WFCountType']=='Characters' else (0 if r is None else 1)
+    r=self.val(p['Input']);r=0 if r is None else (len(r) if isinstance(r,list) or p['WFCountType']=='Characters' else 1)
    elif op=='properties.calendarevents':
     r=self.val(p['WFInput']);r=r[0] if isinstance(r,list) else r;r=r['calendar']
    elif op=='filter.calendarevents':
@@ -82,9 +80,15 @@ class VM:
       else:raise AssertionError(key)
      if match:r.append(ev)
    elif op=='addnewevent':
-    r={'calendar':'公開測試日曆','title':self.val(p['WFCalendarItemTitle']),'start':dt.datetime.fromisoformat(str(self.val(p['WFCalendarItemStartDate']))),'end':dt.datetime.fromisoformat(str(self.val(p['WFCalendarItemEndDate']))),'all_day':p['WFCalendarItemAllDay'],'notes':self.val(p['WFCalendarItemNotes'])};self.events.append(r);self.writes+=1
+    choice=p['WFCalendarDescriptor']
+    if choice.get('Value',{}).get('Type')=='Ask':
+     self.prompts+=1
+     if self.cancel_choice:raise Stop()
+     calendar='公開測試日曆'
+    else:calendar=self.val(choice)['Title']
+    r={'id':next(EVENT_IDS),'calendar':calendar,'title':self.val(p['WFCalendarItemTitle']),'start':dt.datetime.fromisoformat(str(self.val(p['WFCalendarItemStartDate']))),'end':dt.datetime.fromisoformat(str(self.val(p['WFCalendarItemEndDate']))),'all_day':p['WFCalendarItemAllDay'],'notes':self.val(p['WFCalendarItemNotes'])};self.events.append(r);self.writes+=1
    elif op=='removeevents':
-    values=self.val(p['WFInputEvents'])
+    values=self.val(p['WFInputEvents']);values=values if isinstance(values,list) else [values]
     for ev in values:self.events.remove(ev);self.removes+=1
    elif op=='notification':self.messages.append(self.val(p['WFNotificationActionBody']))
    elif op=='exit':raise Stop()
@@ -94,41 +98,35 @@ class VM:
   try:self.seq(0,len(A))
   except Stop:pass
   return self
-v=VM().run();expected=sum(d['date_code']>=20261022 for d in F['holidays'])
-assert v.writes==expected and len(v.events)==expected
-assert all(e['start']==e['end'] for e in v.events)
-v2=VM(v.events).run();assert v2.writes==v2.removes==0 and len(v2.events)==len(v.events)
-v3=VM(v2.events).run();assert v3.writes==v3.removes==0
-# An unrelated all-day event causes a skip, and remains untouched.
+state={}
+v=VM(storage=state).run();expected=sum(d['date_code']>=20261022 for d in F['holidays'])
+assert v.prompts==1 and v.writes==expected and v.removes==0 and len(v.events)==expected
+assert state['TW-DGPA-TargetCalendar-v2']=='公開測試日曆'
+assert all(e['start']==e['end'] and e['start']>=TODAY for e in v.events)
+v2=VM(v.events,storage=state).run();assert v2.prompts==v2.writes==v2.removes==0 and len(v2.events)==expected
+v3=VM(v2.events,storage=state).run();assert v3.prompts==v3.writes==v3.removes==0
+# Existing manually-created all-day event: only the just-created setup seed is removed.
 manual=copy.deepcopy(v.events[0]);manual['notes']='手動行程';manual['title']='個人假期'
-manual_events=[manual]
-m=VM(manual_events).run();assert manual in m.events and len(m.events)==expected
-# Official cancellation removes only marked events, including matching date/calendar.
-newfeed=copy.deepcopy(F);cancel=next(d for d in newfeed['holidays'] if d['date_code']>=20261022)
-newfeed['holidays'].remove(cancel);newfeed['cancelled']=[cancel]
-other_calendar=copy.deepcopy(v.events[0]);other_calendar['calendar']='其他日曆'
-c=VM(v.events+[other_calendar], newfeed).run();assert c.removes==1 and c.writes==0 and other_calendar in c.events
-c2=VM(c.events,newfeed).run();assert c2.removes==c2.writes==0
-# Missing, renamed, duplicate or empty calendar configuration stops before any write.
-for shortcuts in [[],[{'name':NAME+'改名','workflow':FIXTURE}], [{'name':NAME,'workflow':FIXTURE}]*2]:
- blocked=VM(shortcuts=shortcuts).run();assert blocked.writes==blocked.removes==0
-empty=copy.deepcopy(FIXTURE)
-for a in empty['WFWorkflowActions']:
- if a['WFWorkflowActionIdentifier'].endswith('.addnewevent'):a['WFWorkflowActionParameters']['WFCalendarDescriptor']['Title']=''
-e=VM(shortcuts=[{'name':NAME,'workflow':empty}]).run();assert e.writes==e.removes==0
-assert v.reads==[NAME]
-assert all(e['start']>=TODAY for e in v.events)
-depth=0
-for action in A:
- if action['WFWorkflowActionIdentifier'].endswith('.repeat.each'):
-  mode=action['WFWorkflowActionParameters']['WFControlFlowMode']
-  depth += 1 if mode==0 else -1
-  assert depth<=1, 'Nested repeat item scope is forbidden'
-assert len(W['WFWorkflowImportQuestions'])==1
-assert sum(a['WFWorkflowActionIdentifier'].endswith('.addnewevent') for a in A)==1
+m=VM([manual],storage={}).run();assert m.prompts==1 and m.removes==1 and manual in m.events and len(m.events)==expected
+assert all(e['start']>=TODAY for e in m.events)
+# Already-filled calendar: first setup removes its seed and leaves every old event intact.
+old=VM(v.events,storage={}).run();assert old.prompts==1 and old.writes==old.removes==1 and old.events==v.events
+# Canceling the first calendar choice has no event or storage mutations.
+empty={};cancelled=VM(storage=empty,cancel_choice=True).run();assert cancelled.prompts==1 and cancelled.writes==cancelled.removes==0 and not empty
+# A cleared saved choice triggers first-run selection again; final calendar is unchanged.
+cleared={};again=VM(v.events,storage=cleared).run();assert again.prompts==1 and again.events==v.events
+# Official corrections delete only owned events in the chosen calendar.
+newfeed=copy.deepcopy(F);day=next(d for d in newfeed['holidays'] if d['date_code']>=20261022)
+newfeed['holidays'].remove(day);newfeed['cancelled']=[day]
+other=copy.deepcopy(v.events[0]);other['calendar']='其他日曆'
+c=VM(v.events+[other],newfeed,storage=state).run();assert c.prompts==0 and c.removes==1 and c.writes==0 and other in c.events
+c2=VM(c.events,newfeed,storage=state).run();assert c2.prompts==c2.removes==c2.writes==0
+# Invalid feed aborts before any first-run picker, persistence or calendar write.
+bad=copy.deepcopy(F);bad['schema']=2
+empty={};b=VM(feed=bad,storage=empty).run();assert b.prompts==b.writes==b.removes==0 and not empty
+assert W['WFWorkflowImportQuestions']==[]
+assert not any(a['WFWorkflowActionIdentifier'].endswith('.getmyworkflows') for a in A)
+assert sum(a['WFWorkflowActionIdentifier'].endswith('.setstoredcontent') for a in A)==1
 assert 'TW-DGPA-PUBLIC-CONFIG' not in str(W) and '2000-01-01' not in str(W)
 assert not any(a['WFWorkflowActionIdentifier'].endswith(('.writefile','.savefile','.appendfile')) for a in A)
-# Invalid downloaded schema stops before initial setup/event creation.
-bad=copy.deepcopy(F);bad['schema']=2
-b=VM(feed=bad).run();assert b.writes==b.removes==0
-print('PASS: serialized-flow simulation; first run adds only',expected,'future holidays; two repeat runs write/delete zero; manual event preserved; cancellation repeat-safe; missing/duplicate/empty settings and invalid feed stop before writes; unrelated Shortcut contents never read.')
+print('PASS: first-run picker once + persistent storage; first sync only',expected,'real future holidays; repeat runs zero prompts/writes/deletes; manual entries preserved; seeded duplicate removed only; canceled picker leaves no changes; reset asks again; corrections repeat-safe; invalid feed stops before setup.')
