@@ -1,2 +1,51 @@
-# taiwan-holidays
-以行政院人事行政總處官方資料自動更新台灣休假日，提供 iPhone 捷徑使用的 JSON 清單。
+# Taiwan holidays 台灣官方休假日
+
+以[行政院人事行政總處「中華民國政府行政機關辦公日曆表」](https://data.gov.tw/dataset/14718)為唯一來源，提供 iPhone 捷徑可直接讀取的 JSON。
+
+資料包含政府行政機關的週末、國定假日與補假，排除官方標示的上班日。個別雇主、輪班或勞動契約的適用情況，請依自己的工作安排調整。
+
+## 資料網址
+
+[`data/holidays.json`](https://raw.githubusercontent.com/sunnylinisme/taiwan-holidays/main/data/holidays.json)
+
+- `schema`: 格式版本，目前為數字 `1`。
+- `generated_at`: 最後一次成功下載及驗證的 UTC 時間。
+- `years`: 目前提供的西元年度；抓取當年度及下一年度。
+- `valid_until_code`: 資料涵蓋的最後一天，數字 `yyyyMMdd`。
+- `holidays`: 休假日，每筆包含 `date_code`、`title`、`start`、`end`、`last_second`、`marker`、`notes`。
+- `cancelled`: 曾提供為休假日、後經官方改為上班日的日期，供捷徑移除其自行新增的行程。
+- `sources`: 各年度官方 CSV 網址、SHA-256、總日數及休假日數。
+- `warnings`: 下一年度尚未公布等狀況。既有已驗證的下一年度資料會保留。
+
+所有日期時間都明確使用 `+08:00`。整日行程的 `end` 是隔日零時；查找當日行程應使用 `start` 到 `last_second`，避免誤含隔日零時。
+
+## 自動更新
+
+GitHub Actions 每月 **28 日台灣時間 06:23** 執行，也可在 Actions → Update official holidays → Run workflow 手動更新。GitHub 的排程可能延遲，實際結果請看 Actions 狀態與 `generated_at`。
+
+每次先跑測試，再讀取官方目錄、排除 Google 行事曆格式，並選擇檔案路徑年月較新的官方版本。程式驗證欄位、整年度每天一筆、星期、放假旗標及合理日數後，才以原子替換方式寫入 JSON。任何年度下載或格式驗證失敗都不覆蓋現有檔案。
+
+每次成功檢查都更新時間並提交，讓使用者能確認最近檢查日期，也保持專案活動。若排程因長期失敗或 GitHub 政策而停用，請在 Actions 重新啟用。
+
+## 手機捷徑
+
+下載 JSON → 檢查格式版本與涵蓋日期 → 只處理今天起的日期 → 查找指定行事曆的整日行程 → 缺少時新增。
+
+捷徑寫入使用者在本機選定的「台灣國定假日」行事曆。已有同日整日行程即略過，不更動手動建立的原有行程。官方修訂的清理範圍只包含該日期、該行事曆內附註含 `TW-DGPA-GITHUB-V1:yyyyMMdd` 的新版捷徑行程。
+
+此專案不接收、上傳或存放任何人的行事曆內容，也不需要 iCloud 密碼或 GitHub 個人存取權杖。手機的每月自動化請自行設定；首次執行須依 iOS 提示允許網路及行事曆存取。
+
+## 開發與驗證
+
+Python 3.11 以上，僅使用標準函式庫。
+
+```sh
+python3 -m unittest discover -s tests -v
+python3 scripts/update_holidays.py
+```
+
+測試包含閏年、完整年度、重複／缺漏日期、錯誤欄位、錯誤放假旗標、CSV 引號及逗號、官方修訂、修訂撤銷、下一年度暫時缺失，以及失敗時保留舊檔案。
+
+## 資料授權
+
+官方資料依[政府資料開放授權條款第 1 版](https://data.gov.tw/license)使用，來源機關為行政院人事行政總處；此專案是格式轉換與更新服務，並非政府官方網站。

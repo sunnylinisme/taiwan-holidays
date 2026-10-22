@@ -1,0 +1,40 @@
+name: Update official holidays
+
+on:
+  schedule:
+    # Every month on the 28th at 06:23 Asia/Taipei (27th 22:23 UTC).
+    - cron: '23 22 27 * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'tests/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-official-holidays
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test parser and correction handling
+        run: python3 -m unittest discover -s tests -v
+      - name: Download and validate official resources
+        run: python3 scripts/update_holidays.py
+      - name: Commit validated feed and successful check time
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/holidays.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update validated DGPA holiday feed'
+            git push
+          fi
